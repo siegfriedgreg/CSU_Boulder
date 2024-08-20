@@ -1,0 +1,178 @@
+---
+title: "COVID 19 Data Analysis"
+author: "G. Siegfried"
+date: "2024-08-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Description
+
+
+### Required Packages
+```{r declaring}
+# List of packages to check and load
+packages <- c("ggplot2", "dplyr", "readr", "lubridate", "tidyr", "stringr")
+```
+
+#### Installing Packages
+This function checks if the packages listed above are installed and installs any that are missing.
+```{r setupPackages, include=FALSE}
+# Function to check and install packages
+check_and_install <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    message(paste("Installing package:", package))
+    install.packages(package)
+  } else {
+    message(paste("Package", package, "is already installed."))
+  }
+}
+# Apply the function to each package
+sapply(packages, check_and_install)
+```
+
+#### Loading Libraries:
+This function will load the libraries of the required packages listed above.
+```{r setupLibrary, include=FALSE}
+# Function to check and load packages
+check_and_load <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    message(paste("The package", package, "is not installed. Installing now."))
+    install.packages(package)
+  }
+  library(package, character.only = TRUE)
+}
+# Apply the function to each package
+sapply(packages, check_and_load)
+```
+
+### Import Data:
+```{r import-data}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+url_lookup <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+file_names <- c("time_series_covid19_confirmed_US.csv", "time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_US.csv", "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in,file_names)
+
+global_cases <- read_csv(urls[2])
+global_deaths <- read_csv(urls[4])
+us_cases <- read_csv(urls[1])
+us_deaths <- read_csv(urls[3])
+
+uid <- read_csv(url_lookup)
+```
+
+### Transform & Clean Data:
+```{r transform-data}
+uid <- uid %>%
+  select(-c(Lat,Long_, Combined_Key, code3, iso2, iso3, Admin2, UID, FIPS))
+
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c('Province/State','Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat,Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c('Province/State','Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat,Long))
+
+global_combo <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region',
+         Province_State = 'Province/State') %>%
+  mutate(date = mdy(date)) %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+us_cases <- us_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat,Long_))
+
+us_deaths <- us_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat,Long_)) 
+
+us_combo <- us_cases %>%
+  full_join(us_deaths)
+
+global <- global_combo %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population, Combined_Key)
+```
+
+### Summary Data:
+
+### Visualize Data:
+```{r visualize-data}
+
+US_by_State <- us_combo %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths *1000000 / Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+US_Totals <- US_by_State %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths *1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+US_Totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position="bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in US", y=NULL)
+
+state <- "California"
+US_by_State %>%
+  filter(Province_State == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position="bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("COVID19 in ", state), y=NULL)
+```
+
+### Model Data
+```{r model_data}
+
+mod <- lm(deaths ~ cases, data = US_Totals)
+summary(mod)
+
+US_Totals_w_Pred <- US_Totals %>% mutate(pred = predict(mod))
+US_Totals_w_Pred %>% ggplot() +
+  geom_point(aes(x = cases, y = deaths), color = "blue") +
+  geom_point(aes(x = cases, y = pred), color = "red")
+
+```
+
+## Conclusion:
+
+There is a lot of bias within this data due to the errors in collecting the data. I have done my best to represent it as true as possible.
