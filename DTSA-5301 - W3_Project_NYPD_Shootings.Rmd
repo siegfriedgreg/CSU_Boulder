@@ -1,0 +1,137 @@
+---
+title: "Data Analysis: NYPD Shooting Incident (Historical)"
+author: "G. Siegfried"
+date: "August 8th, 2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Description
+
+The data in the file is a list of shootings in NYC from 2006 to the end of 2023.  It is extracted quarterly and then reviewed before being published to the NYC website.  The data is comprised of information about the event, location and time of occurrence and the demographics of the suspect and victim. This data set can be found here: <https://catalog.data.gov/dataset> and is title "NYPD Shooting Incident Data (Historic)".
+
+More information about the data and its efficacy can be found here <https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8/about_data> and footnotes about the data can be found in a pdf here <https://data.cityofnewyork.us/api/views/833y-fsy8/files/e4e3d86c-348f-4a16-a17f-19480c089429?download=true&filename=NYPD_Shootings_Incident_Level_Data_Footnotes.pdf>
+
+### Required Packages
+```{r declaring}
+# List of packages to check and load
+packages <- c("ggplot2", "dplyr", "readr", "lubridate", "tidyr")
+```
+
+#### Installing Packages
+This function checks if the packages listed above are installed and installs any that are missing.
+```{r setupPackages, include=FALSE}
+# Function to check and install packages
+check_and_install <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    message(paste("Installing package:", package))
+    install.packages(package)
+  } else {
+    message(paste("Package", package, "is already installed."))
+  }
+}
+# Apply the function to each package
+sapply(packages, check_and_install)
+```
+
+#### Loading Libraries:
+This function will load the libraries of the required packages listed above.
+```{r setupLibrary, include=FALSE}
+# Function to check and load packages
+check_and_load <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    message(paste("The package", package, "is not installed. Installing now."))
+    install.packages(package)
+  }
+  library(package, character.only = TRUE)
+}
+# Apply the function to each package
+sapply(packages, check_and_load)
+```
+
+### Import Data:
+
+The csv file for the historical NYPD Shooting Incident data can be found here:
+```{r import-data, message=FALSE}
+shooting_data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+nrow(shooting_data)
+head(shooting_data,3)
+```
+
+### Cleaning Data:
+
+Removed Columns: JURISDICTION_CODE, LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, LOCATION_DESC, PERP_AGE_GROUP, PERP_SEX, PERP_RACE, VIC_AGE_GROUP, VIC_SEX, VIC_RACE, X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat
+
+Columns were modified to present in the correct data type, and for the summary to utilize the values correctly.
+```{r clean-data, message=FALSE}
+shooting_data <- shooting_data %>%
+    select(1,2,3,4,6,10) %>%
+    mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+nrow(shooting_data)
+head(shooting_data,3)
+```
+
+### Summary Data:
+
+A data summary of the reduced column set and the modified date type for the OCCUR_DATE column.
+```{r summary-output}
+    summary(shooting_data)
+    nrow(shooting_data)
+```
+Missing Data - as can be seen, no rows are missing from the data. The only missing data comes from the removal of certain columns, whose value does not seem pertinent.
+
+### Visualize Data:
+
+#### General Plotting:
+```{r daily-plot, quiet=TRUE}
+# Aggregate incidents by date
+shooting_data_clean <- shooting_data %>%
+  mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"), # Adjust format if necessary
+         year = year(OCCUR_DATE)) %>% # Extract year
+  group_by(BORO, year, STATISTICAL_MURDER_FLAG) %>% # Group by borough, year, and murder flag
+  summarise(total_incidents = n(), .groups = 'drop') # Count incidents
+
+shooting_data_summary <- shooting_data_clean %>%
+  pivot_wider(names_from = STATISTICAL_MURDER_FLAG, values_from = total_incidents, values_fill = list(total_incidents = 0)) %>%
+  rename(Shooting = `FALSE`, Murder = `TRUE`) # Rename for clarity
+
+first_year <- min(shooting_data_summary$year) # Filter for oldest year
+last_year <- max(shooting_data_summary$year) # Filter for last recent year
+
+shooting_data_summary_year <- shooting_data_summary %>%
+select(year, Shooting, Murder) %>%
+group_by(year) %>%
+summarise(Total_Shooting = sum(Shooting, na.rm = TRUE), Total_Murder = sum(Murder, na.rm = TRUE))
+
+# Plot 1
+ggplot(shooting_data_summary_year, aes(x = year)) +
+  geom_line(aes(y = Total_Shooting, color = "Shooting"), linewidth = 1) +
+  geom_line(aes(y = Total_Murder, color = "Murder"), linewidth = 1) +
+  labs(title = "Annual Shooting and Murder",
+       x = "Year",
+       y = "Number of Incidents",
+       color = "Incident Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Plot 2
+ggplot(shooting_data_summary, aes(x = year)) +
+  geom_line(aes(y = Shooting, color = "Shooting"), linewidth = 1) +
+  geom_line(aes(y = Murder, color = "Murder"), linewidth = 1) +
+  facet_wrap(~ BORO) + # Create separate plots for each borough
+  labs(title = "Annual Shooting and Murder Incidents by Borough",
+       x = "Year",
+       y = "Number of Incidents",
+       color = "Incident Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis labels for readability
+```
+
+## Conclusion:
+
+The overall trend of shootings in NYPD since 2006, including the COVID-19 spike, are decreasing year by year.  Further, there seems to be some boroughs that have a greater increase for events.
+
+There are many sources of bias present within this analysis and data. The second set of graphs seem to illustrate some stark contrast bewteen boroughs.  Going off the foot-notes from the NYPD pdf shared in the description, it could be possible for the lines between boroughs to be a little vague, or some circumstances like a shooting on a subway could be in one borough and end up in the next depending on the next destination location. Biases are also present as there is no population density or other measures that could help explain some of these numbers, especially in the break down of incidents between each borough. Finally, there are some biases on my part based on my ignorance of police procedures, the NYC area, and being somewhat green to statistical inferences.
